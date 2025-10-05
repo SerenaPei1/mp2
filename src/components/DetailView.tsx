@@ -1,7 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, Link, useLocation } from 'react-router-dom';
 import tmdbApi from '../services/tmdbApi';
 import { MovieDetails, Movie } from '../types/tmdb';
+
+type ListState = { list?: Movie[] } | null;
 
 const DetailView: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -12,20 +14,7 @@ const DetailView: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!id) return;
-
-    fetchMovieDetails(parseInt(id, 10));
-
-    const priorList = (location.state as any)?.list as Movie[] | undefined;
-    if (priorList && Array.isArray(priorList) && priorList.length > 0) {
-      setAllMovies(priorList);
-    } else if (allMovies.length === 0) {
-      fetchAllMovies();
-    }
-  }, [id, location.state, allMovies.length]);
-
-  const fetchMovieDetails = async (movieId: number) => {
+  const fetchMovieDetails = useCallback(async (movieId: number) => {
     try {
       setLoading(true);
       setError(null);
@@ -37,16 +26,35 @@ const DetailView: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  const fetchAllMovies = async () => {
+  const fetchAllMovies = useCallback(async () => {
     try {
       const response = await tmdbApi.getPopularMovies(1);
       setAllMovies(response.results);
     } catch (err) {
       console.error('Error fetching movies for navigation:', err);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    if (!id) return;
+
+    fetchMovieDetails(parseInt(id, 10));
+
+    const priorList = (location.state as ListState)?.list;
+    if (priorList?.length) {
+      setAllMovies(priorList);
+    } else {
+      // Only fetch if we don't have any movies yet
+      fetchAllMovies();
+    }
+  }, [id, location.state, fetchMovieDetails, fetchAllMovies]);
+
+  // Scroll to top when movie changes
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: 'auto' });
+  }, [id]);
 
   const getCurrentIndex = (): number => {
     if (!movie || allMovies.length === 0) return -1;
@@ -54,19 +62,19 @@ const DetailView: React.FC = () => {
   };
 
   const goToPrevious = () => {
+    if (!movie || allMovies.length === 0) return;
     const currentIndex = getCurrentIndex();
-    if (currentIndex > 0) {
-      const previousMovie = allMovies[currentIndex - 1];
-      navigate(`/movie/${previousMovie.id}`, { state: { list: allMovies } });
-    }
+    const prevIndex = currentIndex <= 0 ? allMovies.length - 1 : currentIndex - 1; // 首尾相接
+    const previousMovie = allMovies[prevIndex];
+    navigate(`/movie/${previousMovie.id}`, { state: { list: allMovies } });
   };
 
   const goToNext = () => {
+    if (!movie || allMovies.length === 0) return;
     const currentIndex = getCurrentIndex();
-    if (currentIndex < allMovies.length - 1 && currentIndex >= 0) {
-      const nextMovie = allMovies[currentIndex + 1];
-      navigate(`/movie/${nextMovie.id}`, { state: { list: allMovies } });
-    }
+    const nextIndex = currentIndex < 0 || currentIndex >= allMovies.length - 1 ? 0 : currentIndex + 1; // 首尾相接
+    const nextMovie = allMovies[nextIndex];
+    navigate(`/movie/${nextMovie.id}`, { state: { list: allMovies } });
   };
 
   const formatCurrency = (amount: number): string => {
@@ -78,10 +86,13 @@ const DetailView: React.FC = () => {
     }).format(amount);
   };
 
-  const formatRuntime = (minutes: number): string => {
-    const hours = Math.floor(minutes / 60);
-    const mins = minutes % 60;
-    return hours > 0 ? `${hours}h ${mins}m` : `${mins}m`;
+  const formatRuntime = (minutes?: number): string => {
+    if (typeof minutes === 'number' && minutes > 0) {
+      const hours = Math.floor(minutes / 60);
+      const mins = minutes % 60;
+      return hours > 0 ? `${hours}h ${mins}m` : `${mins}m`;
+    }
+    return '—';
   };
 
   if (loading) {
@@ -98,8 +109,6 @@ const DetailView: React.FC = () => {
   }
 
   const currentIndex = getCurrentIndex();
-  const canGoPrevious = currentIndex > 0;
-  const canGoNext = currentIndex < allMovies.length - 1 && currentIndex >= 0;
 
   return (
     <div className="detail-view">
@@ -112,7 +121,7 @@ const DetailView: React.FC = () => {
       <div className="detail-poster">
           <img
             src={tmdbApi.getImageUrl(movie.poster_path, 'w500')}
-            alt={movie.title}
+            alt={`${movie.title} poster`}
             className="movie-poster"
             onError={(e) => {
               const target = e.target as HTMLImageElement;
@@ -130,7 +139,8 @@ const DetailView: React.FC = () => {
 
           <div className="movie-meta">
             <div className="meta-item">
-              <strong>Release Date:</strong> {new Date(movie.release_date).toLocaleDateString()}
+              <strong>Release Date:</strong>{' '}
+              {movie.release_date ? new Date(movie.release_date).toLocaleDateString() : '—'}
             </div>
             <div className="meta-item">
               <strong>Rating:</strong> ⭐ {movie.vote_average.toFixed(1)}/10 ({movie.vote_count} votes)
@@ -169,7 +179,7 @@ const DetailView: React.FC = () => {
             <p>{movie.overview}</p>
           </div>
 
-          {movie.production_companies.length > 0 && (
+          {movie.production_companies?.length > 0 && (
             <div className="production-companies">
               <h3>Production Companies</h3>
               <div className="company-list">
@@ -182,7 +192,7 @@ const DetailView: React.FC = () => {
             </div>
           )}
 
-          {movie.spoken_languages.length > 0 && (
+          {movie.spoken_languages?.length > 0 && (
             <div className="languages">
               <h3>Languages</h3>
               <div className="language-list">
@@ -201,19 +211,21 @@ const DetailView: React.FC = () => {
         <button
           className="btn btn-primary"
           onClick={goToPrevious}
-          disabled={!canGoPrevious}
+          aria-label="Go to previous movie"
         >
           ← Previous Movie
         </button>
         
         <span className="navigation-info">
-          Movie {currentIndex + 1} of {allMovies.length}
+          {allMovies.length > 0 && currentIndex >= 0
+            ? `Movie ${currentIndex + 1} of ${allMovies.length}`
+            : '—'}
         </span>
         
         <button
           className="btn btn-primary"
           onClick={goToNext}
-          disabled={!canGoNext}
+          aria-label="Go to next movie"
         >
           Next Movie →
         </button>
